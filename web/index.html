@@ -1,0 +1,67 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>ShipScribe \u2014 audience-aware release notes</title>
+    <link rel="stylesheet" href="/styles.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <div class="brand"><span class="logo">\u2693</span> ShipScribe</div>
+      <div class="tagline">One diff \u2192 three audiences. Grounded &amp; cited.</div>
+      <div id="provider-badge" class="badge badge-muted" title="Model backend">\u2026</div>
+    </header>
+
+    <main class="layout">
+      <section class="panel controls" aria-label="Input">
+        <label for="range">Commit range</label>
+        <div class="row">
+          <input id="range" type="text" placeholder="latest tag..HEAD (auto)" autocomplete="off" />
+          <button id="generate" class="primary">Generate</button>
+        </div>
+        <p class="hint" id="repo-hint"></p>
+
+        <div class="timeline" aria-label="Agent tool activity">
+          <h3>Agent activity</h3>
+          <ul id="timeline" class="chips"><li class="chip chip-idle">idle</li></ul>
+        </div>
+
+        <details class="live">
+          <summary>Live model stream</summary>
+          <pre id="live" class="live-pre" aria-live="polite"></pre>
+        </details>
+      </section>
+
+      <section class="panel output" aria-label="Release notes">
+        <div class="tabs" role="tablist">
+          <button class="tab active" role="tab" data-tab="changelog">Changelog</button>
+          <button class="tab" role="tab" data-tab="announcement">Announcement</button>
+          <button class="tab" role="tab" data-tab="migration">Migration</button>
+          <span class="spacer"></span>
+          <button id="copy" class="ghost" title="Copy current tab">Copy</button>
+          <button id="apply" class="ghost" disabled title="Write to CHANGELOG.md">Apply to CHANGELOG\u2026</button>
+        </div>
+        <article id="view-changelog" class="view" role="tabpanel"><div class="empty">Release notes will stream here.</div></article>
+        <article id="view-announcement" class="view hidden" role="tabpanel"></article>
+        <article id="view-migration" class="view hidden" role="tabpanel"></article>
+      </section>
+    </main>
+
+    <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modal-title">
+      <div class="modal-card">
+        <h2 id="modal-title">\u26a0\ufe0f Confirm write</h2>
+        <p>ShipScribe will prepend the generated <strong>Changelog</strong> section to
+          <code>CHANGELOG.md</code> in the repository. This is a file write.</p>
+        <pre id="modal-preview" class="preview"></pre>
+        <div class="modal-actions">
+          <button id="modal-cancel" class="ghost">Cancel</button>
+          <button id="modal-confirm" class="primary">Write CHANGELOG.md</button>
+        </div>
+      </div>
+    </div>
+
+    <div id="toast" class="toast hidden" role="status" aria-live="polite"></div>
+    <script src="/app.js" type="module"></script>
+  </body>
+</html>

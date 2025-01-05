@@ -1,0 +1,9 @@
+# Azure Developer CLI (azd) configuration.
+# `azd provision` will deploy infra/main.bicep (Foundry / Azure OpenAI resource).
+name: copilot-hackathon-kit
+metadata:
+  template: copilot-hackathon-kit@0.1.0
+infra:
+  provider: bicep
+  path: infra
+  module: main

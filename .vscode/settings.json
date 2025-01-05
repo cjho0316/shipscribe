@@ -1,0 +1,17 @@
+{
+  // Let Copilot read .github/copilot-instructions.md on every request
+  "github.copilot.chat.codeGeneration.useInstructionFiles": true,
+  // Enable MCP + agent mode
+  "chat.mcp.enabled": true,
+  "chat.agent.enabled": true,
+  // DevSkim security analyzer (Responsible AI / secrets — Criterion 6)
+  "devskim.enableInformationalSeverityRules": true,
+  "devskim.suppressionDurationInDays": 0,
+  // Consistent files
+  "files.eol": "\n",
+  "editor.formatOnSave": true,
+  // Treat .env as secret-bearing — do not auto-open in shares
+  "files.exclude": {
+    "**/node_modules": true
+  }
+}

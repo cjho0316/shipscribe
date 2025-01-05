@@ -1,0 +1,33 @@
+{
+  // VS Code Model Context Protocol servers for the agent.
+  // NOTE: Azure MCP and Context7 are auto-registered by their installed extensions
+  //       (ms-azuretools.vscode-azure-mcp-server, upstash.context7-mcp),
+  //       so they are intentionally NOT duplicated here.
+  "servers": {
+    // Official Microsoft/Azure docs — grounding + anti-hallucination (Criterion 6, 3)
+    "microsoft-docs": {
+      "type": "http",
+      "url": "https://learn.microsoft.com/api/mcp"
+    },
+    // GitHub: repos, issues, PRs, code search (Criterion 2)
+    "github": {
+      "type": "http",
+      "url": "https://api.githubcopilot.com/mcp/"
+    },
+    // Drive a real browser for UX checks + E2E (Criterion 4, 5)
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"]
+    },
+    // Structured multi-step reasoning
+    "sequential-thinking": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-sequential-thinking"]
+    },
+    // Cross-turn knowledge-graph memory
+    "memory": {
+      "command": "npx",
+      "args": ["-y", "@modelcontextprotocol/server-memory"]
+    }
+  }
+}
