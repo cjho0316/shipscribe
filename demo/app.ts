@@ -1,4 +1,5 @@
 export function greet(name: string, json = false): string {
-  const msg = `Hello, ${name}!`;
+  const who = name.trim() || 'world';
+  const msg = `Hello, ${who}!`;
   return json ? JSON.stringify({ message: msg }) : msg;
 }
