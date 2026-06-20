@@ -1,9 +1,18 @@
-# Azure Developer CLI (azd) configuration.
-# `azd provision` will deploy infra/main.bicep (Foundry / Azure OpenAI resource).
-name: copilot-hackathon-kit
+# Azure Developer CLI (azd) configuration — one command: `azd up`.
+# Provisions Foundry + Container Apps (infra/main.bicep) and deploys the
+# ShipScribe web server as a container (Dockerfile) with keyless managed identity.
+# yaml-language-server: $schema=https://raw.githubusercontent.com/Azure/azure-dev/main/schemas/v1.0/azure.yaml.json
+name: shipscribe
 metadata:
-  template: copilot-hackathon-kit@0.1.0
+  template: shipscribe@0.1.0
 infra:
   provider: bicep
   path: infra
   module: main
+services:
+  web:
+    project: .
+    language: js
+    host: containerapp
+    docker:
+      path: ./Dockerfile

@@ -1,0 +1,16 @@
+node_modules
+dist
+npm-debug.log*
+*.log
+.env
+.env.*
+!.env.example
+.DS_Store
+.vscode
+.github
+eval
+demo
+docs
+scripts
+test-results
+playwright-report

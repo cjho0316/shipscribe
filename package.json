@@ -15,7 +15,7 @@
     "demo": "SHIPSCRIBE_OFFLINE=1 tsx src/cli.ts",
     "eval": "tsx eval/runEval.ts",
     "typecheck": "tsc --noEmit",
-    "build": "tsc -p tsconfig.json",
+    "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
     "infra:provision": "az deployment group create --resource-group $AZURE_RESOURCE_GROUP --template-file infra/main.bicep --parameters infra/main.parameters.json"
   },

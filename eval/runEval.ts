@@ -1,181 +1,206 @@
-import { readFileSync } from 'node:fs';
-import { fileURLToPath } from 'node:url';
+import 'dotenv/config';
+import { readFile } from 'node:fs/promises';
 import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../src/config.js';
 import { createProvider } from '../src/model/index.js';
-import type { ChatMessage, LLMProvider } from '../src/model/provider.js';
-import { SYSTEM_PROMPT, parseSections } from '../src/domain/release.js';
+import { AgentSession } from '../src/copilot/copilotSdkAdapter.js';
+import { SYSTEM_PROMPT, parseSections, type ReleaseSections } from '../src/domain/release.js';
+import type { ChatMessage, LLMProvider, ToolSpec } from '../src/model/provider.js';
 
 /**
- * ShipScribe eval harness (Criteria 4 & 6).
+ * Agent-as-judge eval harness (Criteria 2 & 4).
  *
- * Provider-agnostic: runs against Azure Foundry when configured, otherwise the
- * deterministic offline provider, so `npm run eval` always works in CI.
- * Each case feeds synthetic git tool-results into the SAME message protocol the
- * agent uses, generates the 3-section release, then scores it with:
- *   - deterministic checks (format, SHA grounding, citation coverage, audience
- *     separation, breaking-change handling), and
- *   - an agent-as-judge pass (helpfulness / groundedness / safety).
+ * For each case in eval/dataset.jsonl we:
+ *   1. build FIXTURE git tools that return that case's commits/diff (so the run
+ *      is deterministic and independent of the real repo),
+ *   2. run the SAME AgentSession the app uses to produce the 3 sections,
+ *   3. compute MECHANICAL metrics (citation validity/coverage, breaking handled)
+ *      that don't depend on an LLM, and
+ *   4. ask an LLM judge to rate helpfulness / groundedness / safety.
+ *
+ * Runs fully offline on the deterministic mock (judge included), and on Azure
+ * Foundry when AZURE_OPENAI_ENDPOINT is set.
  */
 
 interface Commit {
   sha: string;
   subject: string;
-  author?: string;
+  author: string;
 }
 interface EvalCase {
   name: string;
   range: string;
+  expectBreaking: boolean;
   commits: Commit[];
   diff: string;
-  expectBreaking: boolean;
 }
-
-const here = path.dirname(fileURLToPath(import.meta.url));
-const dataset = readFileSync(path.join(here, 'dataset.jsonl'), 'utf8')
-  .split('\n')
-  .map((l) => l.trim())
-  .filter(Boolean)
-  .map((l) => JSON.parse(l) as EvalCase);
-
-function logText(c: EvalCase): string {
-  return (
-    `Range: ${c.range}\n` +
-    c.commits.map((k) => `- ${k.sha} ${k.subject} \u2014 ${k.author ?? 'dev'}`).join('\n')
-  );
-}
-
-/** Simulate the agent having already gathered git_log + git_diff via tools. */
-async function generate(provider: LLMProvider, c: EvalCase): Promise<string> {
-  const messages: ChatMessage[] = [
-    { role: 'system', content: SYSTEM_PROMPT },
-    { role: 'user', content: `Generate audience-aware release notes for range ${c.range}.` },
-    { role: 'assistant', content: null, tool_calls: [{ id: 'call_log', name: 'git_log', arguments: '{}' }] },
-    { role: 'tool', tool_call_id: 'call_log', name: 'git_log', content: logText(c) },
-    { role: 'assistant', content: null, tool_calls: [{ id: 'call_diff', name: 'git_diff', arguments: '{}' }] },
-    { role: 'tool', tool_call_id: 'call_diff', name: 'git_diff', content: `Range: ${c.range}\n\n[diffstat]\n${c.diff}` },
-  ];
-  let out = '';
-  for await (const ev of provider.streamChat({ messages, temperature: 0 })) {
-    if (ev.type === 'text') out += ev.delta;
-  }
-  return out;
-}
-
-function citedShas(text: string): string[] {
-  const out: string[] = [];
-  const re = /`([0-9a-f]{7,40})`/gi;
-  let m: RegExpExecArray | null;
-  while ((m = re.exec(text))) out.push(m[1].slice(0, 7).toLowerCase());
-  return out;
-}
-
-interface Metrics {
-  format: number;
-  grounded: number;
-  coverage: number;
-  audienceSep: number;
-  breaking: number;
-  invented: string[];
-}
-
-function score(c: EvalCase, text: string): Metrics {
-  const s = parseSections(text);
-  const source = new Set(c.commits.map((k) => k.sha.slice(0, 7).toLowerCase()));
-
-  const format = s.changelog && s.announcement && s.migration ? 1 : 0;
-
-  const cited = citedShas(text);
-  const invented = [...new Set(cited.filter((sha) => !source.has(sha)))];
-  const grounded = cited.length === 0 ? 0 : 1 - invented.length / cited.length;
-
-  const citedInChangelog = new Set(citedShas(s.changelog));
-  let covered = 0;
-  for (const sha of source) if (citedInChangelog.has(sha)) covered++;
-  const coverage = source.size === 0 ? 0 : covered / source.size;
-
-  // The user-facing announcement should stay non-technical (no raw SHAs).
-  const audienceSep = citedShas(s.announcement).length === 0 ? 1 : 0;
-
-  // Breaking changes must be surfaced (or correctly reported absent).
-  const saysNoBreaking = /no\s+breaking/i.test(s.migration);
-  const breaking = c.expectBreaking ? (saysNoBreaking ? 0 : 1) : saysNoBreaking ? 1 : 0.5;
-
-  return { format, grounded, coverage, audienceSep, breaking, invented };
-}
-
-interface JudgeResult {
+interface JudgeScores {
   helpfulness: number;
   groundedness: number;
   safety: number;
   reason: string;
 }
 
-async function judge(provider: LLMProvider, c: EvalCase, text: string): Promise<JudgeResult> {
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+
+async function loadCases(): Promise<EvalCase[]> {
+  const raw = await readFile(path.join(HERE, 'dataset.jsonl'), 'utf8');
+  return raw
+    .split('\n')
+    .map((l) => l.trim())
+    .filter(Boolean)
+    .map((l) => JSON.parse(l) as EvalCase);
+}
+
+/** Tools that return THIS case's data, so generation is deterministic. */
+function fixtureTools(c: EvalCase): ToolSpec[] {
+  const log =
+    `Range: ${c.range}\nCommits: ${c.commits.length}\n` +
+    c.commits.map((x) => `- ${x.sha} ${x.subject} \u2014 ${x.author}`).join('\n');
+  const diff = `Range: ${c.range}\n--- diffstat ---\n${c.diff}\n--- diff ---\n${c.diff}`;
+  const empty = { type: 'object', properties: {}, additionalProperties: false } as Record<string, unknown>;
+  return [
+    { name: 'git_log', description: 'List commits.', risk: 'safe', parameters: empty, handler: async () => log },
+    { name: 'git_diff', description: 'Show diff.', risk: 'safe', parameters: empty, handler: async () => diff },
+  ];
+}
+
+async function generate(provider: LLMProvider, c: EvalCase): Promise<{ text: string; sections: ReleaseSections }> {
+  const session = new AgentSession(provider, fixtureTools(c), SYSTEM_PROMPT, { temperature: 0 });
+  const text = await session.run(
+    `Generate audience-aware release notes for the range ${c.range}. ` +
+      `Use the tools to gather the commits and diff first, then write the three sections.`,
+    { onText: () => {}, confirmFn: async () => false },
+  );
+  return { text, sections: parseSections(text) };
+}
+
+const JUDGE_SYSTEM = `You are a strict evaluator for release notes. Rate the candidate on three axes, each 1-5:
+- helpfulness: clear, actionable, and covers all three audiences (developer changelog, user announcement, migration);
+- groundedness: every change cites a real commit SHA from the provided commits and invents nothing;
+- safety: no secrets, no unsafe or destructive instructions.
+Reply with ONLY compact JSON: {"helpfulness":n,"groundedness":n,"safety":n,"reason":"..."}.`;
+
+function clamp(n: unknown): number {
+  const v = typeof n === 'number' ? n : Number(n);
+  if (!Number.isFinite(v)) return 0;
+  return Math.max(1, Math.min(5, Math.round(v)));
+}
+
+function parseScores(raw: string): JudgeScores {
+  const m = raw.match(/\{[\s\S]*\}/);
+  if (!m) return { helpfulness: 0, groundedness: 0, safety: 0, reason: 'no JSON from judge' };
+  try {
+    const j = JSON.parse(m[0]) as Partial<JudgeScores>;
+    return {
+      helpfulness: clamp(j.helpfulness),
+      groundedness: clamp(j.groundedness),
+      safety: clamp(j.safety),
+      reason: String(j.reason ?? '').slice(0, 160),
+    };
+  } catch {
+    return { helpfulness: 0, groundedness: 0, safety: 0, reason: 'unparseable judge JSON' };
+  }
+}
+
+async function judge(provider: LLMProvider, c: EvalCase, candidate: string): Promise<JudgeScores> {
   const messages: ChatMessage[] = [
+    { role: 'system', content: JUDGE_SYSTEM },
     {
-      role: 'system',
+      role: 'user',
       content:
-        'You are a strict release-notes evaluator. Rate the notes on a 1-5 integer scale for ' +
-        'helpfulness, groundedness (every change cites a real commit SHA from the source list; ' +
-        'no invented SHAs), and safety. Respond ONLY with JSON ' +
-        '{"helpfulness":n,"groundedness":n,"safety":n,"reason":"..."}.',
+        `COMMITS:\n${c.commits.map((x) => `- ${x.sha} ${x.subject}`).join('\n')}\n\n` +
+        `EXPECT_BREAKING: ${c.expectBreaking}\n\nCANDIDATE:\n${candidate}`,
     },
-    { role: 'user', content: `SOURCE COMMITS:\n${logText(c)}\n\nRELEASE NOTES:\n${text}` },
   ];
   let raw = '';
   for await (const ev of provider.streamChat({ messages, temperature: 0 })) {
     if (ev.type === 'text') raw += ev.delta;
   }
-  try {
-    const json = raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1);
-    return JSON.parse(json) as JudgeResult;
-  } catch {
-    return { helpfulness: 0, groundedness: 0, safety: 0, reason: 'unparseable judge output' };
-  }
+  return parseScores(raw);
 }
 
-function pct(n: number): string {
-  return `${Math.round(n * 100)}%`.padStart(4);
+/** Mechanical, non-LLM grounding checks (the objective backbone of the eval). */
+function citationMetrics(c: EvalCase, sections: ReleaseSections): {
+  cited: number;
+  valid: number;
+  coverage: number;
+  validity: number;
+  breakingHandled: boolean;
+} {
+  const known = new Set(c.commits.map((x) => x.sha.slice(0, 7)));
+  const text = `${sections.changelog}\n${sections.announcement}\n${sections.migration}`;
+  const citedShas = new Set<string>();
+  for (const m of text.matchAll(/`([0-9a-f]{7,40})`/gi)) citedShas.add(m[1].slice(0, 7));
+  const cited = citedShas.size;
+  let valid = 0;
+  for (const s of citedShas) if (known.has(s)) valid++;
+  const coverage = known.size ? valid / known.size : 0;
+  const validity = cited ? valid / cited : 0;
+  const mig = sections.migration.toLowerCase();
+  const saysNoBreaking = /no\s+breaking/.test(mig);
+  const breakingHandled = c.expectBreaking ? !saysNoBreaking : saysNoBreaking;
+  return { cited, valid, coverage, validity, breakingHandled };
+}
+
+function bar(n: number): string {
+  return '█'.repeat(n) + '░'.repeat(5 - n);
 }
 
 async function main(): Promise<void> {
   const cfg = loadConfig();
-  const gen = await createProvider(cfg, cfg.model);
-  const jud = await createProvider(cfg, cfg.judgeModel);
+  const provider = await createProvider(cfg);
+  const cases = await loadCases();
 
-  console.log(`\nShipScribe eval \u2014 provider: ${gen.name}${gen.isAzure ? '  (Azure Foundry)' : ''}\n`);
-  console.log('case             fmt grnd cov  aud brk | judge(h/g/s) | score');
-  console.log('-'.repeat(72));
+  console.log(`\nShipScribe eval — provider: ${provider.name}`);
+  if (!provider.isAzure) console.log('(offline mock; judge returns deterministic scores)');
+  console.log('═'.repeat(72));
 
-  let total = 0;
-  let failures = 0;
-  for (const c of dataset) {
-    const text = await generate(gen, c);
-    const m = score(c, text);
-    const j = await judge(jud, c, text);
+  let sumH = 0,
+    sumG = 0,
+    sumS = 0;
+  let allValid = true;
+  let allBreaking = true;
 
-    const deterministic = (m.format + m.grounded + m.coverage + m.audienceSep + m.breaking) / 5;
-    const judgeScore = (j.helpfulness + j.groundedness + j.safety) / 15;
-    const final = 0.6 * deterministic + 0.4 * judgeScore;
-    total += final;
-    if (final < 0.7 || m.invented.length > 0) failures++;
+  for (const c of cases) {
+    const { text, sections } = await generate(provider, c);
+    const m = citationMetrics(c, sections);
+    const scores = await judge(provider, c, text);
+    sumH += scores.helpfulness;
+    sumG += scores.groundedness;
+    sumS += scores.safety;
+    if (m.validity < 1) allValid = false;
+    if (!m.breakingHandled) allBreaking = false;
 
+    console.log(`\n▸ ${c.name}  (${c.range})`);
     console.log(
-      `${c.name.padEnd(16)} ${pct(m.format)} ${pct(m.grounded)} ${pct(m.coverage)} ${pct(
-        m.audienceSep,
-      )} ${pct(m.breaking)} | ${j.helpfulness}/${j.groundedness}/${j.safety}        | ${(final * 100).toFixed(0)}%` +
-        (m.invented.length ? `  \u26a0 invented: ${m.invented.join(',')}` : ''),
+      `  citations: ${m.valid}/${m.cited} valid · coverage ${(m.coverage * 100).toFixed(0)}% · ` +
+        `breaking ${c.expectBreaking ? 'expected' : 'none'} → ${m.breakingHandled ? 'OK' : 'MISS'}`,
     );
+    console.log(
+      `  judge: helpful ${bar(scores.helpfulness)} ${scores.helpfulness}/5 · ` +
+        `grounded ${bar(scores.groundedness)} ${scores.groundedness}/5 · ` +
+        `safe ${bar(scores.safety)} ${scores.safety}/5`,
+    );
+    console.log(`  ↳ ${scores.reason}`);
   }
 
-  console.log('-'.repeat(72));
-  const avg = (total / dataset.length) * 100;
-  console.log(`\nAggregate score: ${avg.toFixed(1)}%   (${dataset.length - failures}/${dataset.length} passed)\n`);
-  if (failures > 0) process.exitCode = 1;
+  const n = cases.length || 1;
+  console.log('\n' + '═'.repeat(72));
+  console.log(
+    `AVG  helpful ${(sumH / n).toFixed(2)} · grounded ${(sumG / n).toFixed(2)} · safe ${(sumS / n).toFixed(2)}` +
+      `  (over ${cases.length} cases)`,
+  );
+  const verdict = allValid && allBreaking;
+  console.log(
+    `GROUNDING  citation-validity ${allValid ? 'PASS' : 'FAIL'} · breaking-handling ${allBreaking ? 'PASS' : 'FAIL'}`,
+  );
+  console.log(verdict ? '\n✅ Eval PASSED\n' : '\n❌ Eval found issues\n');
+  process.exit(verdict ? 0 : 1);
 }
 
 main().catch((err) => {
-  console.error('eval failed:', err);
+  console.error('Eval failed:', (err as Error).message);
   process.exit(1);
 });

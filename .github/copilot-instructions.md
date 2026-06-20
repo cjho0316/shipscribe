@@ -21,8 +21,8 @@ Build a productivity app whose **core engine is the GitHub Copilot SDK agent loo
 
 ## Hard rules (do not violate)
 
-1. **Model layer = Azure Foundry only.** Route every LLM call through `createFoundryClient()` in `src/model/azureFoundry.ts`. Do not call other providers.
-2. **Stream by default.** User-facing model output must stream token-by-token (`onToken`). Streaming quality is explicitly scored.
+1. **Model layer = Azure Foundry only.** Route every LLM call through `createFoundryProvider()` in `src/model/azureFoundry.ts`. Do not call other providers.
+2. **Stream by default.** User-facing model output must stream token-by-token (`streamChat`). Streaming quality is explicitly scored.
 3. **Tool calling is first-class.** Add new capabilities as typed tools in `src/agent/tools.ts` with a JSON schema, a `risk` level, and an idempotent handler.
 4. **Human-in-the-loop for risk.** Any tool with `risk: "confirm"` (writes, shell, network mutations, spend) MUST pass through `confirmFn` before executing. Never auto-run destructive actions.
 5. **Secrets.** Read from `process.env` only. Never hardcode keys, never log raw secrets — always pass logs through `redactSecrets()`. `.env` is git-ignored.
