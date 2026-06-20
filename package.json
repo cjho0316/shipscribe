@@ -3,7 +3,7 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
-  "description": "ShipScribe \u2014 one git diff into audience-aware, citation-grounded release notes. Copilot SDK agent on Microsoft Foundry / Azure OpenAI.",
+  "description": "ShipScribe — one git diff into audience-aware, citation-grounded release notes. Copilot SDK agent on Microsoft Foundry / Azure OpenAI.",
   "engines": {
     "node": ">=18.18"
   },
@@ -14,6 +14,8 @@
     "dev": "tsx watch src/server.ts",
     "demo": "SHIPSCRIBE_OFFLINE=1 tsx src/cli.ts",
     "eval": "tsx eval/runEval.ts",
+    "e2e": "playwright test",
+    "smoke:foundry": "tsx scripts/foundry-smoke.ts",
     "typecheck": "tsc --noEmit",
     "build": "tsc -p tsconfig.build.json",
     "start": "node dist/server.js",
@@ -25,6 +27,7 @@
     "openai": "^4.77.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.61.0",
     "@types/node": "^20.17.0",
     "tsx": "^4.19.2",
     "typescript": "^5.7.2"
