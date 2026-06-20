@@ -32,16 +32,16 @@ jobs:
       - name: Typecheck (strict TypeScript)
         run: npm run typecheck
 
-      - name: Build (tsconfig.build.json -> dist/)
+      - name: Build to dist
         run: npm run build
 
-      - name: Eval (agent-as-judge, citation-validity + breaking-handling)
+      - name: Eval (agent-as-judge, citation validity and breaking handling)
         run: npm run eval
 
       - name: Install Playwright browser (chromium)
         run: npx playwright install --with-deps chromium
 
-      - name: E2E (Playwright: streaming + human-gated save)
+      - name: E2E Playwright (streaming and human-gated save)
         run: npm run e2e
 
       - name: Upload Playwright report
