@@ -1,5 +1,5 @@
 import type { AppConfig } from '../config.js';
-import type { LLMProvider, StreamChatInput, StreamEvent } from './provider.js';
+import type { ChatMessage, LLMProvider, StreamChatInput, StreamEvent } from './provider.js';
 
 /**
  * Microsoft Foundry / Azure OpenAI provider (Criterion 3 - the judged path).
@@ -8,6 +8,31 @@ import type { LLMProvider, StreamChatInput, StreamEvent } from './provider.js';
  *   2. Keyless Microsoft Entra ID via DefaultAzureCredential - run `az login`.
  * Docs: https://learn.microsoft.com/azure/ai-foundry/openai/supported-languages
  */
+
+/**
+ * Convert our internal ChatMessage[] into the exact shape the OpenAI API expects.
+ * Critically, assistant tool calls must carry `type: 'function'` and a nested
+ * `function: { name, arguments }`. The offline mock tolerates our flat ToolCall
+ * shape, but Azure rejects it with HTTP 400
+ * "Missing required parameter: 'messages[].tool_calls[].type'".
+ */
+function toOpenAIMessages(messages: ChatMessage[]): any[] {
+  return messages.map((m) => {
+    if (m.role === 'assistant' && m.tool_calls && m.tool_calls.length) {
+      return {
+        role: 'assistant',
+        content: m.content ?? null,
+        tool_calls: m.tool_calls.map((tc) => ({
+          id: tc.id,
+          type: 'function',
+          function: { name: tc.name, arguments: tc.arguments },
+        })),
+      };
+    }
+    return m;
+  });
+}
+
 export function createFoundryProvider(cfg: AppConfig, modelName?: string): LLMProvider {
   const model = modelName ?? cfg.model;
   let clientPromise: Promise<any> | undefined;
@@ -42,7 +67,7 @@ export function createFoundryProvider(cfg: AppConfig, modelName?: string): LLMPr
       const api = await client();
       const stream = await api.chat.completions.create({
         model,
-        messages,
+        messages: toOpenAIMessages(messages),
         tools: tools?.map((t) => ({
           type: 'function',
           function: { name: t.name, description: t.description, parameters: t.parameters },

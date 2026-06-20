@@ -16,3 +16,5 @@ services:
     host: containerapp
     docker:
       path: ./Dockerfile
+      # Build the image remotely in ACR so no local Docker Desktop is needed.
+      remoteBuild: true
