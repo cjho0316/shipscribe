@@ -1,0 +1,54 @@
+name: CI
+
+# Validate ShipScribe on every push / PR. Everything runs with the deterministic
+# offline mock (SHIPSCRIBE_OFFLINE=1), so no Azure secrets are needed for CI.
+on:
+  push:
+    branches: [main, master]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  verify:
+    runs-on: ubuntu-latest
+    env:
+      SHIPSCRIBE_OFFLINE: '1'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0 # ShipScribe reads real git history for its tools
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck (strict TypeScript)
+        run: npm run typecheck
+
+      - name: Build (tsconfig.build.json -> dist/)
+        run: npm run build
+
+      - name: Eval (agent-as-judge, citation-validity + breaking-handling)
+        run: npm run eval
+
+      - name: Install Playwright browser (chromium)
+        run: npx playwright install --with-deps chromium
+
+      - name: E2E (Playwright: streaming + human-gated save)
+        run: npm run e2e
+
+      - name: Upload Playwright report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-report
+          path: playwright-report/
+          retention-days: 7
+          if-no-files-found: ignore

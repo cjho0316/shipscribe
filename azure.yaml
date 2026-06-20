@@ -16,5 +16,6 @@ services:
     host: containerapp
     docker:
       path: ./Dockerfile
-      # Build the image remotely in ACR so no local Docker Desktop is needed.
-      remoteBuild: true
+      # Image is built by the host's Docker engine and pushed to ACR.
+      # In CI (GitHub Actions) the runner provides Docker; this avoids ACR
+      # remote build (ACR Tasks), which is restricted on some subscriptions.
